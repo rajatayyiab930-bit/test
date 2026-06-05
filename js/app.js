@@ -1,7 +1,9 @@
-(function() {
-  'use strict';
+import { AppStorage } from './storage.js';
+import { ChatEngine } from './chat.js';
+import { UIManager } from './ui.js';
+import { SettingsManager } from './settings.js';
 
-  if (window.__chatInitialized) return;
+if (!window.__chatInitialized) {
   window.__chatInitialized = true;
 
   const chat = new ChatEngine();
@@ -68,5 +70,5 @@
     });
   }
 
-  console.log('PremiumChat initialized v2.0.0 (cross-device sync)');
-})();
+  console.log('PremiumChat v3.0.0 — Firebase Realtime Sync');
+}

@@ -1,0 +1,64 @@
+{
+  "rules": {
+    "premium-chat": {
+      ".read": false,
+      ".write": false,
+
+      "sessions": {
+        "$sessionId": {
+          ".read": true,
+          ".write": true,
+          ".indexOn": ["createdAt", "lastActivity", "createdBy"]
+        }
+      },
+
+      "messages": {
+        "$sessionId": {
+          ".read": true,
+          ".write": "auth === null || newData.exists()",
+          "$messageId": {
+            ".validate": "newData.hasChildren(['id', 'senderId', 'text', 'ts'])"
+          },
+          ".indexOn": ["ts"]
+        }
+      },
+
+      "events": {
+        "$sessionId": {
+          ".read": true,
+          ".write": "auth === null || newData.exists()",
+          "$eventId": {
+            ".validate": "newData.hasChildren(['type', 'sessionId', 'senderId'])"
+          }
+        }
+      },
+
+      "users": {
+        "$userId": {
+          ".read": true,
+          ".write": "auth === null",
+          ".validate": "newData.hasChildren(['name'])"
+        }
+      },
+
+      "presence": {
+        "$sessionId": {
+          "$userId": {
+            ".read": true,
+            ".write": true
+          }
+        }
+      },
+
+      "typing": {
+        "$sessionId": {
+          "$userId": {
+            ".read": true,
+            ".write": true,
+            ".validate": "newData.hasChildren(['typing', 'ts'])"
+          }
+        }
+      }
+    }
+  }
+}

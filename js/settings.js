@@ -1,3 +1,5 @@
+import { AppStorage } from './storage.js';
+
 class SettingsManager {
   constructor(chat, ui) {
     this.chat = chat;
@@ -125,6 +127,7 @@ class SettingsManager {
     input.addEventListener('input', () => {
       this.ui.autoResizeInput();
       this.ui.updateCharCount();
+      this.chat.sendTypingIndicator();
     });
 
     input.addEventListener('keydown', (e) => {
@@ -208,7 +211,7 @@ class SettingsManager {
           case 'delete-chat':
             if (confirm('Delete this entire chat? This cannot be undone!')) {
               AppStorage.deleteSession(this.chat.activeSession.id);
-              this.chat.activeSession = null;
+              this.chat.closeSession();
               this.chat.messages = [];
               this.ui.renderChatList();
               this.els['no-chat'].style.display = 'flex';
@@ -256,7 +259,7 @@ class SettingsManager {
       if (newName && newName.trim()) {
         this.chat.currentUser.name = newName.trim();
         AppStorage.saveUser(this.chat.currentUser.id, this.chat.currentUser);
-        this.ui.els['settings-name-display'].textContent = newName.trim();
+        this.els['settings-name-display'].textContent = newName.trim();
         this.updateSidebarUser(this.chat.currentUser);
         this.ui.toast('Name updated to: ' + newName.trim(), 'success');
       }
@@ -301,7 +304,6 @@ class SettingsManager {
       }
     });
 
-    // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
         this.els['settings-modal'].style.display = 'none';
@@ -325,7 +327,6 @@ class SettingsManager {
       }
     });
 
-    // Prevent zoom on double tap
     let lastTouch = 0;
     document.addEventListener('touchstart', (e) => {
       const now = Date.now();
@@ -333,7 +334,6 @@ class SettingsManager {
       lastTouch = now;
     }, { passive: false });
 
-    // Handle resize for responsive
     window.addEventListener('resize', () => {
       if (window.innerWidth >= 768) {
         this.els['sidebar'].classList.remove('hidden');
@@ -342,4 +342,4 @@ class SettingsManager {
   }
 }
 
-window.SettingsManager = SettingsManager;
+export { SettingsManager };

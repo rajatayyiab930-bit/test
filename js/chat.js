@@ -1,3 +1,5 @@
+import { SyncEngine } from './sync-engine.js';
+
 class ChatEngine {
   constructor() {
     this.currentUser = null;
@@ -6,99 +8,113 @@ class ChatEngine {
     this.selectedMessages = new Set();
     this.editingMessage = null;
     this.replyTo = null;
-    this.listeners = [];
+    this._listeners = new Map();
+    this._typingTimer = null;
+
     this.sync = new SyncEngine();
-    this.initSync();
+    this._initSync();
+
+    this.sync.onConnection((connected) => {
+      this._emit('connection', connected);
+    });
   }
 
-  initSync() {
-    this.sync.onMessage((data) => {
-      switch (data.type) {
-        case 'new_message':
-          if (data.sessionId === this.activeSession?.id && data.userId !== this.currentUser?.id) {
-            this.receiveMessage(data.message);
-          }
-          break;
-        case 'message_updated':
-          if (data.sessionId === this.activeSession?.id) {
-            this.updateMessageInList(data.messageId, data.updates);
-          }
-          break;
-        case 'message_deleted':
-          if (data.sessionId === this.activeSession?.id) {
-            this.removeMessageFromList(data.messageId);
-          }
-          break;
-        case 'user_online':
-          this.notifyListeners('user_status', { userId: data.userId, status: 'online', sessionId: data.sessionId });
-          break;
-        case 'typing':
-          if (data.sessionId === this.activeSession?.id && data.userId !== this.currentUser?.id) {
-            this.notifyListeners('typing', { userId: data.userId, sessionId: data.sessionId });
-          }
-          break;
-        case 'presence':
-          this.handlePresence(data);
-          break;
-        case 'session_meta':
-          this.handleSessionMeta(data);
-          break;
+  // ── Wire up sync engine events ──
+  _initSync() {
+    // From Firebase: new messages
+    this.sync.on('msg', (data) => {
+      if (!this.activeSession || data.sessionId !== this.activeSession.id) return;
+      this._ingestMessage(data);
+    });
+
+    // From Firebase: events (edit/delete)
+    this.sync.on('evt', (data) => {
+      if (!data.senderId || data.senderId === this.currentUser?.id) return;
+      if (!this.activeSession || data.sessionId !== this.activeSession.id) return;
+      if (data.type === 'edit') this._applyEdit(data);
+      else if (data.type === 'delete') this._applyDelete(data);
+    });
+
+    // From BroadcastChannel: same-browser messages and events
+    this.sync.on('raw', (data) => {
+      if (data.senderId === this.currentUser?.id) return;
+      if (!this.activeSession || data.sessionId !== this.activeSession.id) return;
+      if (data.type === 'new_message') {
+        // Already handled by Firebase — dedup via id check in _ingestMessage
+        this._ingestMessage(data);
+      } else if (data.type === 'edit') {
+        this._applyEdit(data);
+      } else if (data.type === 'delete') {
+        this._applyDelete(data);
+      }
+    });
+
+    // Presence updates
+    this.sync.on('presence', (data) => this._onPresence(data));
+
+    // Typing indicators
+    this.sync.on('typing', (data) => {
+      if (data.roomId === this.activeSession?.id && data.userId !== this.currentUser?.id) {
+        this._emit('typing', { userId: data.userId, sessionId: data.roomId });
       }
     });
   }
 
-  handlePresence(data) {
-    if (data.sessionId !== this.activeSession?.id || !data.users) {
-      this.notifyListeners('presence', data);
-      return;
+  // ── Ingest an incoming message (dedup by id) ──
+  _ingestMessage(msg) {
+    if (this.messages.find(m => m.id === msg.id)) return;
+    msg.status = 'read';
+    msg.timestamp = msg.ts || msg.timestamp || Date.now();
+    AppStorage.addMessage(this.activeSession.id, msg);
+    this.messages.push(msg);
+    this._updateSessionLastMsg(msg.text);
+    this._emit('new_message', msg);
+    this._emit('render_messages', this.messages);
+  }
+
+  // ── Apply edit event from remote ──
+  _applyEdit(data) {
+    const msg = this.messages.find(m => m.id === data.msgId);
+    if (!msg) return;
+    msg.text = data.text;
+    msg.edited = true;
+    AppStorage.updateMessage(this.activeSession.id, data.msgId, { text: data.text, edited: true });
+    this._emit('message_updated', msg);
+    this._emit('render_messages', this.messages);
+  }
+
+  // ── Apply delete event from remote ──
+  _applyDelete(data) {
+    AppStorage.deleteMessage(this.activeSession.id, data.msgId);
+    this.messages = this.messages.filter(m => m.id !== data.msgId);
+    this.selectedMessages.delete(data.msgId);
+    this._emit('message_deleted', data.msgId);
+    this._emit('render_messages', this.messages);
+  }
+
+  // ── Presence ──
+  _onPresence(data) {
+    if (data.roomId !== this.activeSession?.id) return;
+    const otherId = Object.keys(data.users).find(id => id !== this.currentUser?.id);
+    if (!otherId) return;
+    const info = data.users[otherId];
+    const other = this.getOtherUser(this.activeSession);
+    if (other && info) {
+      if (info.name) other.name = info.name;
+      if (info.avatar !== undefined) other.avatar = info.avatar;
+      other.online = info.online === true;
+      other.lastSeen = info.lastSeen || Date.now();
+      AppStorage.saveUser(other.id, other);
+      this._emit('user_status', {
+        userId: otherId,
+        status: other.online ? 'online' : 'offline',
+        sessionId: data.roomId
+      });
+      this._emit('session_updated', this.activeSession);
     }
-
-    const otherUserId = Object.keys(data.users).find(id => id !== this.currentUser?.id);
-    if (otherUserId && data.users[otherUserId]) {
-      const otherInfo = data.users[otherUserId];
-      const otherUser = this.getOtherUser(this.activeSession);
-      if (otherUser && otherInfo.name) {
-        otherUser.name = otherInfo.name;
-        if (otherInfo.avatar !== undefined) otherUser.avatar = otherInfo.avatar;
-        if (otherInfo.device) otherUser.device = otherInfo.device;
-        otherUser.online = otherInfo.online;
-        otherUser.lastSeen = otherInfo.lastSeen || Date.now();
-        AppStorage.saveUser(otherUser.id, otherUser);
-        this.notifyListeners('user_status', {
-          userId: otherUserId,
-          status: otherInfo.online ? 'online' : 'offline',
-          sessionId: data.sessionId
-        });
-        this.notifyListeners('session_updated', this.activeSession);
-      }
-    }
-
-    this.notifyListeners('presence', data);
   }
 
-  handleSessionMeta(data) {
-    if (data.sessionId !== this.activeSession?.id || !data.meta) return;
-
-    const meta = data.meta;
-    if (meta.createdBy && meta.createdBy !== this.currentUser?.id) {
-      const otherUser = this.getOtherUser(this.activeSession);
-      if (otherUser && meta.createdByName) {
-        otherUser.name = meta.createdByName;
-        AppStorage.saveUser(otherUser.id, otherUser);
-        this.notifyListeners('session_updated', this.activeSession);
-      }
-    }
-  }
-
-  addListener(event, fn) {
-    this.listeners.push({ event, fn });
-    return () => { this.listeners = this.listeners.filter(l => l.event !== event || l.fn !== fn); };
-  }
-
-  notifyListeners(event, data) {
-    this.listeners.filter(l => l.event === event).forEach(l => l.fn(data));
-  }
-
+  // ── User management ──
   setCurrentUser(user) {
     this.currentUser = user;
     AppStorage.setCurrentUser(user);
@@ -106,16 +122,17 @@ class ChatEngine {
 
   getOtherUser(session) {
     if (!session || !this.currentUser) return null;
-    const otherId = session.participants.find(id => id !== this.currentUser?.id);
+    const otherId = session.participants.find(id => id !== this.currentUser.id);
     return otherId ? AppStorage.getUser(otherId) : null;
   }
 
+  // ── Session ──
   createSession(name, avatarIdx) {
     const otherId = AppStorage.generateId();
     const otherUser = {
       id: otherId,
       name: name || 'User ' + (Math.floor(Math.random() * 900) + 100),
-      avatar: avatarIdx || Math.floor(Math.random() * 6),
+      avatar: avatarIdx ?? Math.floor(Math.random() * 6),
       device: this.currentUser?.device === 'mobile' ? 'desktop' : 'mobile',
       createdAt: Date.now(),
       lastSeen: Date.now()
@@ -132,6 +149,17 @@ class ChatEngine {
       unread: 0
     };
     AppStorage.saveSession(session);
+
+    if (this.sync.ready) {
+      this.sync.saveSessionMeta(session.id, {
+        createdBy: this.currentUser.id,
+        createdByName: this.currentUser.name,
+        createdByDevice: this.currentUser.device,
+        participantIds: [this.currentUser.id, otherId],
+        createdAt: session.createdAt
+      });
+    }
+
     return session;
   }
 
@@ -148,12 +176,7 @@ class ChatEngine {
       device: this.currentUser.device
     });
 
-    this.notifyListeners('session_opened', session);
-    this.sync.send({
-      type: 'user_online',
-      userId: this.currentUser.id,
-      sessionId: session.id
-    });
+    this._emit('session_opened', session);
     return this.messages;
   }
 
@@ -163,8 +186,10 @@ class ChatEngine {
     AppStorage.setActiveSession(null);
   }
 
+  // ── Send message ──
   sendMessage(text) {
     if (!this.activeSession || !text.trim()) return null;
+
     const msg = {
       id: 'msg_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
       sessionId: this.activeSession.id,
@@ -173,60 +198,37 @@ class ChatEngine {
       timestamp: Date.now(),
       status: 'sending',
       edited: false,
-      replyTo: this.replyTo || null
+      replyTo: this.replyTo || null,
+      forwarded: false
     };
 
     AppStorage.addMessage(this.activeSession.id, msg);
     this.messages.push(msg);
-    this.updateSessionLastMsg(msg.text);
+    this._updateSessionLastMsg(msg.text);
     this.replyTo = null;
 
-    this.sync.send({
-      type: 'new_message',
-      sessionId: this.activeSession.id,
-      userId: this.currentUser.id,
-      message: msg
-    });
+    this.sync.sendMessage(msg);
 
-    setTimeout(() => {
-      msg.status = 'sent';
-      AppStorage.updateMessage(this.activeSession.id, msg.id, { status: 'sent' });
-      this.notifyListeners('message_updated', msg);
-      this.renderMessages();
-    }, 300);
+    // Simulate delivery status locally
+    setTimeout(() => this._setStatus(msg.id, 'sent'), 300);
+    setTimeout(() => this._setStatus(msg.id, 'delivered'), 800);
+    setTimeout(() => this._setStatus(msg.id, 'read'), 2000);
 
-    setTimeout(() => {
-      msg.status = 'delivered';
-      AppStorage.updateMessage(this.activeSession.id, msg.id, { status: 'delivered' });
-      this.notifyListeners('message_updated', msg);
-      this.renderMessages();
-    }, 800);
-
-    setTimeout(() => {
-      msg.status = 'read';
-      AppStorage.updateMessage(this.activeSession.id, msg.id, { status: 'read' });
-      this.notifyListeners('message_updated', msg);
-      this.renderMessages();
-    }, 2000);
-
-    this.notifyListeners('new_message', msg);
+    this._emit('new_message', msg);
     return msg;
   }
 
-  receiveMessage(msg) {
-    if (!this.activeSession || msg.sessionId !== this.activeSession.id) return;
-
-    const exists = this.messages.find(m => m.id === msg.id);
-    if (exists) return;
-
-    msg.status = 'read';
-    AppStorage.addMessage(this.activeSession.id, msg);
-    this.messages.push(msg);
-    this.updateSessionLastMsg(msg.text);
-    this.notifyListeners('new_message', msg);
-    this.renderMessages();
+  _setStatus(msgId, status) {
+    if (!this.activeSession) return;
+    const msg = this.messages.find(m => m.id === msgId);
+    if (!msg) return;
+    msg.status = status;
+    AppStorage.updateMessage(this.activeSession.id, msgId, { status });
+    this._emit('message_updated', msg);
+    this._emit('render_messages', this.messages);
   }
 
+  // ── Edit message ──
   editMessage(msgId, newText) {
     if (!this.activeSession) return;
     const msg = this.messages.find(m => m.id === msgId);
@@ -236,124 +238,74 @@ class ChatEngine {
     msg.edited = true;
     AppStorage.updateMessage(this.activeSession.id, msgId, { text: newText, edited: true });
 
-    this.sync.send({
-      type: 'message_updated',
-      sessionId: this.activeSession.id,
-      messageId: msgId,
-      updates: { text: newText, edited: true }
-    });
-
-    this.notifyListeners('message_updated', msg);
-    this.renderMessages();
+    this.sync.sendEdit(this.activeSession.id, msgId, newText);
+    this._emit('message_updated', msg);
+    this._emit('render_messages', this.messages);
   }
 
+  // ── Delete message(s) ──
   deleteMessage(msgId) {
     if (!this.activeSession) return;
     AppStorage.deleteMessage(this.activeSession.id, msgId);
     this.messages = this.messages.filter(m => m.id !== msgId);
     this.selectedMessages.delete(msgId);
-
-    this.sync.send({
-      type: 'message_deleted',
-      sessionId: this.activeSession.id,
-      messageId: msgId
-    });
-
-    this.notifyListeners('message_deleted', msgId);
-    this.renderMessages();
+    this.sync.sendDelete(this.activeSession.id, msgId);
+    this._emit('render_messages', this.messages);
   }
 
   deleteMessages(msgIds) {
     msgIds.forEach(id => this.deleteMessage(id));
   }
 
+  // ── Resend ──
   resendMessage(msgId) {
     const msg = this.messages.find(m => m.id === msgId);
     if (msg) this.sendMessage(msg.text);
   }
 
+  // ── Forward ──
   forwardMessage(msgId, targetSessionId) {
     const msg = this.messages.find(m => m.id === msgId);
-    if (!msg) return;
+    if (!msg) return null;
 
-    const forwardMsg = {
+    const fwd = {
       id: 'msg_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
       sessionId: targetSessionId,
       senderId: this.currentUser.id,
       text: msg.text,
       timestamp: Date.now(),
-      status: 'sent',
+      status: 'sending',
       edited: false,
       forwarded: true,
       replyTo: null
     };
 
-    AppStorage.addMessage(targetSessionId, forwardMsg);
-    this.sync.send({
-      type: 'new_message',
-      sessionId: targetSessionId,
-      userId: this.currentUser.id,
-      message: forwardMsg
-    });
-
-    return forwardMsg;
+    AppStorage.addMessage(targetSessionId, fwd);
+    this.sync.sendMessage(fwd);
+    return fwd;
   }
 
-  updateMessageInList(msgId, updates) {
-    const msg = this.messages.find(m => m.id === msgId);
-    if (msg) {
-      Object.assign(msg, updates);
-      this.notifyListeners('message_updated', msg);
-      this.renderMessages();
-    }
-  }
-
-  removeMessageFromList(msgId) {
-    this.messages = this.messages.filter(m => m.id !== msgId);
-    this.notifyListeners('message_deleted', msgId);
-    this.renderMessages();
-  }
-
-  updateSessionLastMsg(text) {
+  // ── Typing ──
+  sendTypingIndicator() {
     if (!this.activeSession) return;
-    this.activeSession.lastMessage = text.slice(0, 60) + (text.length > 60 ? '...' : '');
-    this.activeSession.updatedAt = Date.now();
-    AppStorage.saveSession(this.activeSession);
-    this.notifyListeners('session_updated', this.activeSession);
+    if (this._typingTimer) clearTimeout(this._typingTimer);
+    this.sync.sendTyping(this.activeSession.id, this.currentUser.id, true);
+    this._typingTimer = setTimeout(() => {
+      this.sync.sendTyping(this.activeSession.id, this.currentUser.id, false);
+    }, 2500);
   }
 
-  getSessions() {
-    return AppStorage.getSessions().filter(s => s.participants.includes(this.currentUser?.id));
-  }
-
-  searchMessages(query) {
-    if (!query.trim()) return this.messages;
-    const q = query.toLowerCase();
-    return this.messages.filter(m => m.text.toLowerCase().includes(q));
-  }
-
-  getSessionsBySearch(query) {
-    if (!query.trim()) return this.getSessions();
-    const q = query.toLowerCase();
-    return this.getSessions().filter(s => {
-      const other = this.getOtherUser(s);
-      return other?.name.toLowerCase().includes(q) || s.lastMessage?.toLowerCase().includes(q);
-    });
-  }
-
+  // ── Share link ──
   getShareableLink(sessionId) {
     if (!sessionId) sessionId = this.activeSession?.id;
     if (!sessionId) return '';
-
-    if (this.sync.firebaseReady) {
-      this.sync.db.ref(`rooms/${sessionId}/meta`).update({
+    if (this.sync.ready) {
+      this.sync.saveSessionMeta(sessionId, {
         createdBy: this.currentUser.id,
         createdByName: this.currentUser.name,
-        createdByAvatar: this.currentUser.avatar,
-        createdAt: Date.now()
+        createdByDevice: this.currentUser.device
       });
     }
-
     const base = window.location.href.split('#')[0].split('?')[0];
     return base + '?join=' + encodeURIComponent(sessionId);
   }
@@ -393,21 +345,47 @@ class ChatEngine {
     return session;
   }
 
+  // ── Helpers ──
+  _updateSessionLastMsg(text) {
+    if (!this.activeSession) return;
+    this.activeSession.lastMessage = text.slice(0, 60) + (text.length > 60 ? '...' : '');
+    this.activeSession.updatedAt = Date.now();
+    AppStorage.saveSession(this.activeSession);
+    this._emit('session_updated', this.activeSession);
+  }
+
+  getSessions() {
+    return AppStorage.getSessions().filter(s => s.participants.includes(this.currentUser?.id));
+  }
+
+  searchMessages(query) {
+    if (!query.trim()) return this.messages;
+    const q = query.toLowerCase();
+    return this.messages.filter(m => m.text.toLowerCase().includes(q));
+  }
+
+  getSessionsBySearch(query) {
+    if (!query.trim()) return this.getSessions();
+    const q = query.toLowerCase();
+    return this.getSessions().filter(s => {
+      const other = this.getOtherUser(s);
+      return other?.name.toLowerCase().includes(q) || s.lastMessage?.toLowerCase().includes(q);
+    });
+  }
+
   exportChat(sessionId) {
     const msgs = AppStorage.getMessages(sessionId);
     const session = AppStorage.getSession(sessionId);
     const other = session ? this.getOtherUser(session) : null;
     const user = this.currentUser;
 
-    let text = `=== PremiumChat Export ===\n`;
-    text += `Date: ${new Date().toLocaleString()}\n`;
+    let text = `=== PremiumChat Export ===\nDate: ${new Date().toLocaleString()}\n`;
     text += `Participants: ${user?.name || 'Me'} & ${other?.name || 'Unknown'}\n`;
     text += `Messages: ${msgs.length}\n${'='.repeat(30)}\n\n`;
 
     msgs.forEach(m => {
       const sender = m.senderId === user?.id ? user.name : other?.name || 'Unknown';
-      const time = new Date(m.timestamp).toLocaleString();
-      text += `[${time}] ${sender}: ${m.text}${m.edited ? ' (edited)' : ''}${m.forwarded ? ' (forwarded)' : ''}\n`;
+      text += `[${new Date(m.timestamp).toLocaleString()}] ${sender}: ${m.text}${m.edited ? ' (edited)' : ''}${m.forwarded ? ' (forwarded)' : ''}\n`;
     });
 
     const blob = new Blob([text], { type: 'text/plain' });
@@ -419,18 +397,20 @@ class ChatEngine {
     URL.revokeObjectURL(url);
   }
 
-  sendTypingIndicator() {
-    if (!this.activeSession) return;
-    this.sync.send({
-      type: 'typing',
-      userId: this.currentUser.id,
-      sessionId: this.activeSession.id
-    });
+  // ── Internal event system ──
+  on(event, fn) {
+    if (!this._listeners.has(event)) this._listeners.set(event, []);
+    this._listeners.get(event).push(fn);
+    return () => {
+      const a = this._listeners.get(event);
+      if (a) { const i = a.indexOf(fn); if (i >= 0) a.splice(i, 1); }
+    };
   }
 
-  renderMessages() {
-    this.notifyListeners('render_messages', this.messages);
+  _emit(event, data) {
+    const a = this._listeners.get(event);
+    if (a) a.forEach(f => f(data));
   }
 }
 
-window.ChatEngine = ChatEngine;
+export { ChatEngine };

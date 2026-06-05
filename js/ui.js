@@ -1,3 +1,5 @@
+import { AppStorage } from './storage.js';
+
 class UIManager {
   constructor(chat) {
     this.chat = chat;
@@ -31,16 +33,24 @@ class UIManager {
   }
 
   setupListeners() {
-    this.chat.addListener('new_message', () => this.scrollToBottom());
-    this.chat.addListener('message_updated', () => this.scrollToBottom());
-    this.chat.addListener('render_messages', () => this.renderMessageList());
-    this.chat.addListener('session_opened', (s) => this.updateChatHeader(s));
-    this.chat.addListener('session_updated', () => this.renderChatList());
-    this.chat.addListener('user_status', (d) => this.updateUserStatus(d));
-    this.chat.addListener('typing', () => this.showTyping());
+    this.chat.on('new_message', () => this.scrollToBottom());
+    this.chat.on('message_updated', () => this.scrollToBottom());
+    this.chat.on('render_messages', () => this.renderMessageList());
+    this.chat.on('session_opened', (s) => this.updateChatHeader(s));
+    this.chat.on('session_updated', () => this.renderChatList());
+    this.chat.on('user_status', (d) => this.updateUserStatus(d));
+    this.chat.on('typing', () => this.showTyping());
+    this.chat.on('connection', (connected) => {
+      const el = this.els['cu-status'];
+      if (el && this.chat.activeSession) {
+        el.innerHTML = connected
+          ? '<span class="status-dot online"></span> Online'
+          : '<span class="status-dot offline"></span> Offline';
+      }
+    });
   }
 
-  // ===== SPLASH =====
+  // ── SPLASH ──
   animateSplash(callback) {
     let progress = 0;
     const interval = setInterval(() => {
@@ -61,7 +71,7 @@ class UIManager {
     if (screen) screen.classList.add('active');
   }
 
-  // ===== AUTH =====
+  // ── AUTH ──
   getAuthData() {
     const name = this.els['auth-name'].value.trim() || 'User';
     const avatar = parseInt(document.querySelector('.avatar-option.active')?.dataset.avatar || '0');
@@ -69,7 +79,7 @@ class UIManager {
     return { name, avatar, device };
   }
 
-  // ===== CHAT LIST =====
+  // ── CHAT LIST ──
   renderChatList() {
     const sessions = this.chat.getSessions().filter(s => !s.archived);
     const search = this.els['search-input']?.value?.trim();
@@ -87,7 +97,6 @@ class UIManager {
       'var(--gradient-purple)', 'var(--gradient-pink)', 'var(--gradient-green)',
       'var(--gradient-orange)', 'var(--gradient-blue)', 'var(--gradient-indigo)'
     ];
-    const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
     this.els['chat-list'].innerHTML = filtered.map(s => {
       const other = this.chat.getOtherUser(s);
@@ -127,7 +136,7 @@ class UIManager {
     });
   }
 
-  // ===== CHAT HEADER =====
+  // ── CHAT HEADER ──
   updateChatHeader(session) {
     const other = this.chat.getOtherUser(session);
     if (!other) return;
@@ -149,7 +158,7 @@ class UIManager {
     this.renderMessageList();
   }
 
-  // ===== MESSAGES =====
+  // ── MESSAGES ──
   renderMessageList() {
     const list = this.els['messages-list'];
     const msgs = this.chat.messages;
@@ -183,10 +192,11 @@ class UIManager {
         statusHtml = `<span class="message-status ${m.status}">${statusIcons[m.status] || statusIcons.sent}</span>`;
       }
 
-      const replyHtml = m.replyTo ? `
-        <div style="font-size:11px;color:rgba(255,255,255,0.4);border-left:2px solid var(--accent-1);padding-left:8px;margin-bottom:4px;">
-          ${this.escapeHtml(m.replyTo.text?.slice(0, 40))}
-        </div>` : '';
+      let replyHtml = '';
+      if (m.replyTo) {
+        const replyText = m.replyTo.text || '';
+        replyHtml = `<div style="font-size:11px;color:rgba(255,255,255,0.4);border-left:2px solid var(--accent-1);padding-left:8px;margin-bottom:4px;">${this.escapeHtml(replyText.slice(0, 40))}</div>`;
+      }
 
       const editedHtml = m.edited ? ' <span style="font-size:10px;opacity:0.5">(edited)</span>' : '';
       const forwardedHtml = m.forwarded ? ' <span style="font-size:10px;opacity:0.5">↗</span>' : '';
@@ -314,7 +324,7 @@ class UIManager {
     }
   }
 
-  // ===== INPUT =====
+  // ── INPUT ──
   getInputText() { return this.els['message-input'].value; }
   setInputText(t) { this.els['message-input'].value = t; this.autoResizeInput(); this.updateCharCount(); }
 
@@ -344,7 +354,7 @@ class UIManager {
     this.chat.replyTo = null;
   }
 
-  // ===== REPLY =====
+  // ── REPLY ──
   setReply(msg) {
     this.chat.replyTo = msg;
     this.els['reply-text'].textContent = msg.text.slice(0, 80) + (msg.text.length > 80 ? '...' : '');
@@ -352,7 +362,7 @@ class UIManager {
     this.els['message-input'].focus();
   }
 
-  // ===== EMOJI =====
+  // ── EMOJI ──
   setupEmojiPicker() {
     const emojis = ['😀','😁','😂','🤣','😃','😄','😅','😆','😉','😊','😋','😎','😍','🥰','😘','😜','😝','🤑','🤗','🤩',
       '👍','👎','👊','✊','🤛','🤜','👏','🙌','🤝','💪','✌️','🤞','🖕','💅','👀','👁️','🧠','❤️','💔','💖',
@@ -382,14 +392,14 @@ class UIManager {
       this.els['emoji-picker'].style.display === 'none' ? 'grid' : 'none';
   }
 
-  // ===== SEARCH =====
+  // ── SEARCH ──
   toggleSearch() {
     const el = this.els['sidebar-search'];
     el.style.display = el.style.display === 'none' ? 'block' : 'none';
     if (el.style.display === 'block') this.els['search-input'].focus();
   }
 
-  // ===== SETTINGS =====
+  // ── SETTINGS ──
   openSettings() {
     const user = this.chat.currentUser;
     if (!user) return;
@@ -407,7 +417,7 @@ class UIManager {
     this.els['setting-sound'].checked = settings.sound !== false;
   }
 
-  // ===== TOAST =====
+  // ── TOAST ──
   toast(msg, type = 'info') {
     const el = document.createElement('div');
     el.className = 'toast ' + type;
@@ -419,7 +429,7 @@ class UIManager {
     }, 2500);
   }
 
-  // ===== UTILITIES =====
+  // ── UTILITIES ──
   escapeHtml(text) {
     const d = document.createElement('div');
     d.textContent = text;
@@ -443,15 +453,14 @@ class UIManager {
     });
   }
 
-  showTyping() {
-    // Could show typing indicator in header
-  }
+  showTyping() {}
 
   updateUserStatus(data) {
     if (data.sessionId === this.chat.activeSession?.id) {
-      this.els['cu-status'].innerHTML = `<span class="status-dot"></span> Online`;
+      const statusText = data.status === 'online' ? 'Online' : 'Offline';
+      this.els['cu-status'].innerHTML = `<span class="status-dot ${data.status}"></span> ${statusText}`;
     }
   }
 }
 
-window.UIManager = UIManager;
+export { UIManager };

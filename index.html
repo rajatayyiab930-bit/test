@@ -43,7 +43,7 @@
           </svg>
         </div>
         <h1 class="splash-title" id="splash-title">PremiumChat</h1>
-        <p class="splash-subtitle">Luxury Real-Time Messenger</p>
+        <p class="splash-subtitle">Cross-Device Real-Time Messenger</p>
         <div class="splash-loader">
           <div class="splash-progress" id="splash-progress"></div>
         </div>
@@ -190,7 +190,7 @@
               <div>
                 <div class="cu-name" id="cu-name">User 2</div>
                 <div class="cu-status" id="cu-status">
-                  <span class="status-dot"></span> Online
+                  <span class="status-dot online"></span> Online
                 </div>
               </div>
             </div>
@@ -304,12 +304,12 @@
               <h4>Cross-Device Sync</h4>
               <p class="settings-about" style="font-size:12px;color:var(--text-muted);line-height:1.5;">
                 Open a chat → tap ⋮ → Share Chat → open link on other device.
-                Messages sync in real-time across devices.
+                Messages sync in real-time across devices via Firebase.
               </p>
             </div>
             <div class="settings-section">
               <h4>About</h4>
-              <p class="settings-about">PremiumChat v2.0.0<br>Cross-Device Real-Time Messenger</p>
+              <p class="settings-about">PremiumChat v3.0.0<br>Firebase Realtime Sync</p>
             </div>
           </div>
         </div>
@@ -332,14 +332,23 @@
     </div>
   </div>
 
-  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database-compat.js"></script>
-  <script src="js/firebase-config.js"></script>
-  <script src="js/sync-engine.js"></script>
-  <script src="js/storage.js"></script>
-  <script src="js/chat.js"></script>
-  <script src="js/ui.js"></script>
-  <script src="js/settings.js"></script>
-  <script src="js/app.js"></script>
+  <!-- Firebase SDK (modular v10) loaded via importmap -->
+  <script type="importmap">
+  {
+    "imports": {
+      "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+      "firebase/database": "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js"
+    }
+  }
+  </script>
+
+  <!-- App modules — loaded as ES modules, executed in order -->
+  <script type="module" src="js/firebase-config.js"></script>
+  <script type="module" src="js/sync-engine.js"></script>
+  <script type="module" src="js/storage.js"></script>
+  <script type="module" src="js/chat.js"></script>
+  <script type="module" src="js/ui.js"></script>
+  <script type="module" src="js/settings.js"></script>
+  <script type="module" src="js/app.js"></script>
 </body>
 </html>

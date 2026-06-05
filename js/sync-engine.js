@@ -1,177 +1,239 @@
+import { initializeApp } from 'firebase/app';
+import { getDatabase, ref, onChildAdded, onValue, off, push, set, update, remove, onDisconnect, limitToLast, query } from 'firebase/database';
+import { FIREBASE_CONFIG } from './firebase-config.js';
+
+const DB_PATHS = {
+  sessions: 'premium-chat/sessions',
+  messages: 'premium-chat/messages',
+  events: 'premium-chat/events',
+  users: 'premium-chat/users',
+  presence: 'premium-chat/presence',
+  typing: 'premium-chat/typing'
+};
+
 class SyncEngine {
   constructor() {
-    this.handlers = [];
-    this.firebaseReady = false;
-    this.currentSessionId = null;
-    this.currentUserId = null;
-    this._firebaseListeners = [];
-    this._localStorageKey = 'pc_sync_channel';
+    this._handlers = new Map();
+    this._cleanups = [];
+    this._bc = null;
+    this._bcKey = 'premium-chat-sync';
+    this._app = null;
+    this._db = null;
+    this._ready = false;
+    this._roomId = null;
+    this._userId = null;
+    this._userInfo = null;
+    this._pending = [];
 
-    this._initBroadcastChannel();
-    this._initLocalStorage();
+    this._initBC();
     this._initFirebase();
   }
 
-  // ── BroadcastChannel (same-browser same-origin tabs) ──
-  _initBroadcastChannel() {
+  get ready() { return this._ready; }
+  get roomId() { return this._roomId; }
+  get userId() { return this._userId; }
+
+  // ── BroadcastChannel (same-browser tabs) ──
+  _initBC() {
     try {
-      this.bc = new BroadcastChannel('premium-chat');
-      this.bc.onmessage = (e) => this._dispatch(e.data);
-    } catch (e) {
-      this.bc = null;
+      this._bc = new BroadcastChannel(this._bcKey);
+      this._bc.onmessage = (e) => this._emit('raw', e.data);
+    } catch {
+      this._bc = null;
     }
   }
 
-  // ── localStorage 'storage' event (fallback for same-browser) ──
-  _initLocalStorage() {
-    window.addEventListener('storage', (e) => {
-      if (e.key === this._localStorageKey && e.newValue) {
-        try {
-          const data = JSON.parse(e.newValue);
-          this._dispatch(data);
-        } catch {}
-      }
-    });
-  }
-
-  // ── Firebase Realtime Database (cross-device) ──
+  // ── Firebase init (modular SDK v10) ──
   _initFirebase() {
-    if (!window.firebase || !FIREBASE_CONFIG || !FIREBASE_CONFIG.apiKey) return;
-
+    if (!FIREBASE_CONFIG || !FIREBASE_CONFIG.apiKey) {
+      console.warn('[Sync] No Firebase config — cross-device sync disabled');
+      return;
+    }
     try {
-      if (!firebase.apps.length) {
-        firebase.initializeApp(FIREBASE_CONFIG);
-      }
-      this.db = firebase.database();
-      this.firebaseReady = true;
+      this._app = initializeApp(FIREBASE_CONFIG);
+      this._db = getDatabase(this._app);
+      this._ready = true;
+      const q = this._pending;
+      this._pending = null;
+      q.forEach(([type, data]) => this._write(type, data));
     } catch (e) {
-      console.warn('Firebase init failed:', e.message);
+      console.error('[Sync] Firebase init error:', e);
     }
   }
 
-  // ── Join a room (session) via Firebase ──
-  joinRoom(sessionId, userId, userInfo = {}) {
+  // ── Connection monitoring ──
+  onConnection(cb) {
+    if (!this._ready) { cb(false); return () => {}; }
+    const r = ref(this._db, '.info/connected');
+    const fn = onValue(r, (s) => cb(s.val() === true));
+    return () => off(r, 'value', fn);
+  }
+
+  // ── Join / leave room ──
+  joinRoom(roomId, userId, info = {}) {
     this.leaveRoom();
-    this.currentSessionId = sessionId;
-    this.currentUserId = userId;
+    this._roomId = roomId;
+    this._userId = userId;
+    this._userInfo = info;
+    if (!this._ready) return;
 
-    if (!this.firebaseReady) return;
+    const p = (base) => `${base}/${roomId}`;
 
-    // Listen for new messages in this room
-    const msgsRef = this.db.ref(`rooms/${sessionId}/messages`);
-    const msgsCB = msgsRef.limitToLast(50).on('child_added', (snapshot) => {
-      const data = snapshot.val();
-      if (data && data.userId !== userId) {
-        data._firebase = true;
-        this._dispatch(data);
-      }
+    // 1. Messages (actual chat messages only)
+    const msgQ = query(ref(this._db, p(DB_PATHS.messages)), limitToLast(100));
+    const msgFn = onChildAdded(msgQ, (snap) => {
+      const d = snap.val();
+      if (!d || d.senderId === userId) return;
+      this._emit('msg', { ...d, _key: snap.key });
     });
-    this._firebaseListeners.push({ ref: msgsRef, cb: msgsCB, event: 'child_added' });
+    this._cleanups.push(() => off(msgQ, 'child_added', msgFn));
 
-    // Listen for events (status updates, typing, etc.)
-    const evtsRef = this.db.ref(`rooms/${sessionId}/events`);
-    const evtsCB = evtsRef.limitToLast(20).on('child_added', (snapshot) => {
-      const data = snapshot.val();
-      if (data && data.userId !== userId) {
-        data._firebase = true;
-        this._dispatch(data);
-      }
+    // 2. Events (edit/delete operations)
+    const evtQ = query(ref(this._db, p(DB_PATHS.events)), limitToLast(50));
+    const evtFn = onChildAdded(evtQ, (snap) => {
+      const d = snap.val();
+      if (!d) return;
+      this._emit('evt', { ...d, _key: snap.key });
     });
-    this._firebaseListeners.push({ ref: evtsRef, cb: evtsCB, event: 'child_added' });
+    this._cleanups.push(() => off(evtQ, 'child_added', evtFn));
 
-    // Listen for session metadata
-    const metaRef = this.db.ref(`rooms/${sessionId}/meta`);
-    const metaCB = metaRef.on('value', (snapshot) => {
-      const meta = snapshot.val();
-      if (meta) {
-        this._dispatch({ type: 'session_meta', sessionId, meta });
-      }
+    // 3. Presence
+    const presR = ref(this._db, p(DB_PATHS.presence));
+    const presFn = onValue(presR, (s) => {
+      this._emit('presence', { roomId, users: s.val() || {} });
     });
-    this._firebaseListeners.push({ ref: metaRef, cb: metaCB, event: 'value' });
+    this._cleanups.push(() => off(presR, 'value', presFn));
 
-    // Set presence with user info
-    const presenceRef = this.db.ref(`rooms/${sessionId}/users/${userId}`);
-    presenceRef.onDisconnect().remove();
-    presenceRef.set({ ...userInfo, online: true, lastSeen: Date.now() });
+    // 4. My presence
+    const myP = ref(this._db, `${p(DB_PATHS.presence)}/${userId}`);
+    onDisconnect(myP).remove();
+    set(myP, { ...info, online: true, lastSeen: Date.now() });
 
-    // Listen for user presence changes
-    const usersRef = this.db.ref(`rooms/${sessionId}/users`);
-    const usersCB = usersRef.on('value', (snapshot) => {
-      const users = snapshot.val() || {};
-      this._dispatch({ type: 'presence', users, sessionId });
-    });
-    this._firebaseListeners.push({ ref: usersRef, cb: usersCB, event: 'value' });
-
-    // Update session metadata with creator info
-    if (userInfo.name) {
-      this.db.ref(`rooms/${sessionId}/meta`).update({
-        updatedAt: Date.now(),
-        lastActive: Date.now()
+    // 5. Typing
+    const typR = ref(this._db, p(DB_PATHS.typing));
+    const typFn = onValue(typR, (s) => {
+      const all = s.val() || {};
+      Object.entries(all).forEach(([uid, v]) => {
+        if (uid !== userId && v.typing && Date.now() - (v.ts || 0) < 4000) {
+          this._emit('typing', { roomId, userId: uid });
+        }
       });
-    }
+    });
+    this._cleanups.push(() => off(typR, 'value', typFn));
   }
 
   leaveRoom() {
-    if (this.firebaseReady && this.currentSessionId && this.currentUserId) {
-      const presenceRef = this.db.ref(`rooms/${this.currentSessionId}/users/${this.currentUserId}`);
-      presenceRef.remove();
+    if (this._ready && this._roomId && this._userId) {
+      remove(ref(this._db, `${DB_PATHS.presence}/${this._roomId}/${this._userId}`));
+      remove(ref(this._db, `${DB_PATHS.typing}/${this._roomId}/${this._userId}`));
     }
-
-    this._firebaseListeners.forEach(({ ref, cb, event }) => {
-      try { ref.off(event, cb); } catch {}
-    });
-    this._firebaseListeners = [];
-
-    this.currentSessionId = null;
+    this._cleanups.forEach(f => { try { f(); } catch {} });
+    this._cleanups = [];
+    this._roomId = null;
+    this._userId = null;
   }
 
-  // ── Send message to all channels ──
-  send(data) {
-    if (this.bc) {
-      try { this.bc.postMessage(data); } catch {}
+  // ── Send message ──
+  sendMessage(msg) {
+    const rid = msg.sessionId || this._roomId;
+    if (!rid) return null;
+
+    const payload = {
+      id: msg.id,
+      sessionId: rid,
+      senderId: msg.senderId,
+      text: msg.text,
+      ts: msg.timestamp || Date.now(),
+      edited: !!msg.edited,
+      replyTo: msg.replyTo || null,
+      forwarded: !!msg.forwarded,
+      status: 'sent'
+    };
+
+    if (this._bc) {
+      try { this._bc.postMessage({ ...payload, type: 'new_message' }); } catch {}
     }
+    this._write('new_message', payload);
+    return payload;
+  }
+
+  // ── Edit message ──
+  sendEdit(sessionId, msgId, newText) {
+    const evt = { type: 'edit', sessionId, msgId, text: newText, edited: true, senderId: this._userId };
+    if (this._bc) { try { this._bc.postMessage({ ...evt, _bc: true }); } catch {} }
+    this._write('event', evt);
+  }
+
+  // ── Delete message ──
+  sendDelete(sessionId, msgId) {
+    const evt = { type: 'delete', sessionId, msgId, senderId: this._userId };
+    if (this._bc) { try { this._bc.postMessage({ ...evt, _bc: true }); } catch {} }
+    this._write('event', evt);
+  }
+
+  // ── Typing indicator ──
+  sendTyping(sessionId, userId, typing) {
+    if (!this._ready || !sessionId) return;
+    const r = ref(this._db, `${DB_PATHS.typing}/${sessionId}/${userId}`);
+    if (typing) {
+      set(r, { typing: true, ts: Date.now() });
+      setTimeout(() => update(r, { typing: false }), 3000);
+    } else {
+      set(r, { typing: false });
+    }
+  }
+
+  // ── Session metadata ──
+  saveSessionMeta(sessionId, meta) {
+    this._write('meta', { sessionId, meta });
+  }
+
+  // ── Internal write ──
+  _write(type, data) {
+    if (!this._ready) {
+      if (this._pending) this._pending.push([type, data]);
+      return;
+    }
+    const rid = data.sessionId || this._roomId;
+    if (!rid) return;
 
     try {
-      localStorage.setItem(this._localStorageKey, JSON.stringify(data));
-    } catch {}
-
-    this._sendFirebase(data);
-  }
-
-  _sendFirebase(data) {
-    if (!this.firebaseReady) return;
-
-    const sessionId = data.sessionId || this.currentSessionId;
-    if (!sessionId) return;
-
-    if (data.type === 'new_message') {
-      this.db.ref(`rooms/${sessionId}/messages`).push(data);
-    } else {
-      this.db.ref(`rooms/${sessionId}/events`).push(data);
+      switch (type) {
+        case 'new_message':
+          push(ref(this._db, `${DB_PATHS.messages}/${rid}`), data);
+          break;
+        case 'event':
+          push(ref(this._db, `${DB_PATHS.events}/${rid}`), data);
+          break;
+        case 'meta':
+          update(ref(this._db, `${DB_PATHS.sessions}/${data.sessionId}`), { ...data.meta, updatedAt: Date.now() });
+          break;
+      }
+    } catch (e) {
+      console.error('[Sync] write error:', e);
     }
   }
 
-  // ── Listen for messages ──
-  onMessage(handler) {
-    this.handlers.push(handler);
+  // ── Event system ──
+  on(event, fn) {
+    if (!this._handlers.has(event)) this._handlers.set(event, []);
+    this._handlers.get(event).push(fn);
     return () => {
-      const idx = this.handlers.indexOf(handler);
-      if (idx >= 0) this.handlers.splice(idx, 1);
+      const a = this._handlers.get(event);
+      if (a) { const i = a.indexOf(fn); if (i >= 0) a.splice(i, 1); }
     };
   }
 
-  _dispatch(data) {
-    this.handlers.forEach(h => h(data));
+  _emit(event, data) {
+    const a = this._handlers.get(event);
+    if (a) a.forEach(f => f(data));
   }
 
-  // ── Cleanup ──
   destroy() {
     this.leaveRoom();
-    this.handlers = [];
-    if (this.bc) {
-      try { this.bc.close(); } catch {}
-    }
+    this._handlers.clear();
+    if (this._bc) { try { this._bc.close(); } catch {}; this._bc = null; }
   }
 }
 
-window.SyncEngine = SyncEngine;
+export { SyncEngine };
