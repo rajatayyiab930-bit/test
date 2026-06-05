@@ -1,0 +1,144 @@
+/* ===== DESKTOP (1025px+) ===== */
+@media (min-width: 1025px) {
+  #chat-screen.active {
+    flex-direction: row;
+  }
+
+  .sidebar {
+    width: var(--sidebar-width);
+    position: relative;
+  }
+
+  .chat-back { display: none !important; }
+
+  .no-chat-svg { width: 140px; height: 140px; }
+  .no-chat-content h3 { font-size: 24px; }
+
+  #active-chat { display: flex !important; }
+  #no-chat { display: flex !important; }
+
+  .emoji-picker { width: 320px; max-height: 300px; }
+}
+
+/* ===== TABLET (768px - 1024px) ===== */
+@media (min-width: 768px) and (max-width: 1024px) {
+  #chat-screen.active {
+    flex-direction: row;
+  }
+
+  .sidebar { width: 280px; }
+
+  .chat-back { display: none !important; }
+
+  .emoji-picker { width: 280px; max-height: 220px; }
+}
+
+/* ===== MOBILE (< 768px) ===== */
+@media (max-width: 767px) {
+  #chat-screen.active {
+    flex-direction: column;
+  }
+
+  .sidebar {
+    width: 100%;
+    position: absolute;
+    inset: 0;
+    z-index: 10;
+    transition: transform 0.3s ease;
+  }
+
+  .sidebar.hidden {
+    transform: translateX(-100%);
+  }
+
+  .main-chat {
+    width: 100%;
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+  }
+
+  .chat-back { display: flex; }
+
+  #no-chat { display: none; }
+
+  #active-chat { display: flex; }
+
+  .auth-container { padding: 16px; }
+  .auth-card { padding: 24px; }
+  .auth-logo { width: 48px; height: 48px; }
+  .auth-header h2 { font-size: 20px; }
+
+  .message-bubble { max-width: 85%; }
+
+  .emoji-picker {
+    width: calc(100% - 24px);
+    max-height: 200px;
+    left: 12px;
+  }
+
+  .sidebar-header { height: 56px; }
+  .chat-header { height: 56px; }
+
+  .chat-input-container {
+    padding: 6px 8px;
+    gap: 6px;
+  }
+
+  .ci-btn { width: 36px; height: 36px; }
+  .ci-btn svg { width: 22px; height: 22px; }
+
+  .no-chat-svg { width: 80px; height: 80px; }
+  .no-chat-content h3 { font-size: 18px; }
+  .no-chat-content p { font-size: 13px; }
+
+  .modal { width: 95%; }
+}
+
+/* ===== SMALL MOBILE (< 400px) ===== */
+@media (max-width: 399px) {
+  .auth-card { padding: 16px; }
+  .avatar-option { width: 36px; height: 36px; font-size: 14px; }
+  .device-btn { padding: 10px; font-size: 12px; }
+  .device-btn svg { width: 16px; height: 16px; }
+
+  .message-bubble { max-width: 90%; padding: 8px 12px; }
+  .message-text { font-size: 13px; }
+
+  .chat-item { padding: 10px; }
+  .ci-avatar { width: 40px; height: 40px; font-size: 15px; }
+
+  .emoji-picker { grid-template-columns: repeat(7, 1fr); }
+}
+
+/* ===== LANDSCAPE MODE ===== */
+@media (max-height: 500px) and (orientation: landscape) {
+  .splash-title { font-size: 24px; }
+  .splash-logo { width: 60px; height: 60px; }
+  .splash-loader { width: 150px; }
+
+  .auth-card { padding: 16px; }
+  .auth-header { margin-bottom: 16px; }
+
+  .chat-header { height: 48px; }
+  .sidebar-header { height: 48px; }
+  .sb-avatar { width: 32px; height: 32px; font-size: 14px; }
+
+  .emoji-picker { max-height: 150px; }
+}
+
+/* ===== DARK MODE PREFERENCE ===== */
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg-primary: #f5f5f5;
+    --bg-secondary: #ffffff;
+    --bg-card: rgba(0,0,0,0.03);
+    --bg-glass: rgba(255,255,255,0.8);
+    --bg-glass-hover: rgba(255,255,255,0.9);
+    --border-color: rgba(0,0,0,0.08);
+    --border-light: rgba(0,0,0,0.12);
+    --text-primary: #1a1a2e;
+    --text-secondary: rgba(0,0,0,0.5);
+    --text-muted: rgba(0,0,0,0.3);
+  }
+}
