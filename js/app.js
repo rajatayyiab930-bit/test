@@ -1,9 +1,8 @@
-import { AppStorage } from './storage.js';
-import { ChatEngine } from './chat.js';
-import { UIManager } from './ui.js';
-import { SettingsManager } from './settings.js';
+(function() {
+  'use strict';
 
-if (!window.__chatInitialized) {
+  if (window.__chatInitialized) return;
+  window.__chatInitialized = true;
   window.__chatInitialized = true;
 
   const chat = new ChatEngine();

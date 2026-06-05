@@ -1,5 +1,3 @@
-import { SyncEngine } from './sync-engine.js';
-
 class ChatEngine {
   constructor() {
     this.currentUser = null;
@@ -413,4 +411,4 @@ class ChatEngine {
   }
 }
 
-export { ChatEngine };
+window.ChatEngine = ChatEngine;

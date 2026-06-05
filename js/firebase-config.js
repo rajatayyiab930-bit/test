@@ -8,5 +8,3 @@ const FIREBASE_CONFIG = {
   appId: "1:799597764416:web:bc6cb89c0ee1f54505e4a5",
   measurementId: "G-TT270RW6MG"
 };
-
-export { FIREBASE_CONFIG };

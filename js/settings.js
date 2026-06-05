@@ -1,5 +1,3 @@
-import { AppStorage } from './storage.js';
-
 class SettingsManager {
   constructor(chat, ui) {
     this.chat = chat;
@@ -342,4 +340,4 @@ class SettingsManager {
   }
 }
 
-export { SettingsManager };
+window.SettingsManager = SettingsManager;

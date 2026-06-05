@@ -1,5 +1,3 @@
-import { AppStorage } from './storage.js';
-
 class UIManager {
   constructor(chat) {
     this.chat = chat;
@@ -463,4 +461,4 @@ class UIManager {
   }
 }
 
-export { UIManager };
+window.UIManager = UIManager;

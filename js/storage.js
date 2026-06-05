@@ -99,4 +99,4 @@ class AppStorage {
   }
 }
 
-export { AppStorage };
+window.AppStorage = AppStorage;
