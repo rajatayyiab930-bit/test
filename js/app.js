@@ -13,17 +13,26 @@
   window.settings = settings;
 
   const savedUser = AppStorage.getCurrentUser();
-  const savedSession = AppStorage.getActiveSession();
+  const savedSessionId = AppStorage.getActiveSession();
+  const joinParam = new URLSearchParams(window.location.search).get('join');
+  window._pendingJoin = joinParam;
 
-  if (savedUser) {
-    chat.setCurrentUser(savedUser);
+  function afterAuth() {
     ui.animateSplash(() => {
       ui.showScreen('chat-screen');
       settings.updateSidebarUser(savedUser);
       ui.renderChatList();
 
-      if (savedSession) {
-        const session = AppStorage.getSession(savedSession);
+      if (joinParam) {
+        chat.joinSessionByLink(joinParam);
+        if (window.innerWidth < 768) {
+          ui.els['sidebar'].classList.add('hidden');
+        }
+        return;
+      }
+
+      if (savedSessionId) {
+        const session = AppStorage.getSession(savedSessionId);
         if (session) {
           chat.openSession(session);
           if (window.innerWidth >= 768) {
@@ -45,6 +54,11 @@
       }
       ui.renderChatList();
     });
+  }
+
+  if (savedUser) {
+    chat.setCurrentUser(savedUser);
+    afterAuth();
   } else {
     ui.animateSplash(() => {
       ui.showScreen('auth-screen');
@@ -54,5 +68,5 @@
     });
   }
 
-  console.log('PremiumChat initialized v1.0.0');
+  console.log('PremiumChat initialized v2.0.0 (cross-device sync)');
 })();

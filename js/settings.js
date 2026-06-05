@@ -38,14 +38,23 @@ class SettingsManager {
       this.updateSidebarUser(user);
 
       this.ui.showScreen('chat-screen');
+      this.ui.renderChatList();
 
-      const sessions = this.chat.getSessions();
-      if (sessions.length === 0) {
-        this.createDefaultSession(user);
+      const pendingJoin = window._pendingJoin;
+      if (pendingJoin) {
+        this.chat.joinSessionByLink(pendingJoin);
+        window._pendingJoin = null;
+        if (window.innerWidth < 768) {
+          this.els['sidebar'].classList.add('hidden');
+        }
       } else {
-        this.ui.renderChatList();
-        if (window.innerWidth >= 768) {
-          this.chat.openSession(sessions[0]);
+        const sessions = this.chat.getSessions();
+        if (sessions.length > 0) {
+          if (window.innerWidth >= 768) {
+            this.chat.openSession(sessions[0]);
+          }
+        } else {
+          this.createDefaultSession(user);
         }
       }
 
@@ -171,6 +180,9 @@ class SettingsManager {
         const action = btn.dataset.action;
         this.els['chat-menu-dropdown'].style.display = 'none';
         switch (action) {
+          case 'share-chat':
+            this.shareCurrentChat();
+            break;
           case 'clear-chat':
             if (confirm('Clear all messages in this chat?')) {
               AppStorage.saveMessages(this.chat.activeSession.id, []);
@@ -207,6 +219,25 @@ class SettingsManager {
         }
       });
     });
+  }
+
+  shareCurrentChat() {
+    if (!this.chat.activeSession) return;
+    const link = this.chat.getShareableLink(this.chat.activeSession.id);
+
+    if (navigator.share) {
+      navigator.share({
+        title: 'Join my PremiumChat',
+        text: 'Chat with me on PremiumChat!',
+        url: link
+      }).catch(() => {});
+    } else {
+      navigator.clipboard.writeText(link).then(() => {
+        this.ui.toast('Share link copied! Send it to another device.', 'success');
+      }).catch(() => {
+        prompt('Copy this link to share:', link);
+      });
+    }
   }
 
   setupSettingsModal() {

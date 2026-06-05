@@ -6,14 +6,13 @@ class ChatEngine {
     this.selectedMessages = new Set();
     this.editingMessage = null;
     this.replyTo = null;
-    this.broadcast = new BroadcastChannel('premium-chat');
     this.listeners = [];
-    this.initBroadcast();
+    this.sync = new SyncEngine();
+    this.initSync();
   }
 
-  initBroadcast() {
-    this.broadcast.onmessage = (e) => {
-      const data = e.data;
+  initSync() {
+    this.sync.onMessage((data) => {
       switch (data.type) {
         case 'new_message':
           if (data.sessionId === this.activeSession?.id && data.userId !== this.currentUser?.id) {
@@ -38,8 +37,57 @@ class ChatEngine {
             this.notifyListeners('typing', { userId: data.userId, sessionId: data.sessionId });
           }
           break;
+        case 'presence':
+          this.handlePresence(data);
+          break;
+        case 'session_meta':
+          this.handleSessionMeta(data);
+          break;
       }
-    };
+    });
+  }
+
+  handlePresence(data) {
+    if (data.sessionId !== this.activeSession?.id || !data.users) {
+      this.notifyListeners('presence', data);
+      return;
+    }
+
+    const otherUserId = Object.keys(data.users).find(id => id !== this.currentUser?.id);
+    if (otherUserId && data.users[otherUserId]) {
+      const otherInfo = data.users[otherUserId];
+      const otherUser = this.getOtherUser(this.activeSession);
+      if (otherUser && otherInfo.name) {
+        otherUser.name = otherInfo.name;
+        if (otherInfo.avatar !== undefined) otherUser.avatar = otherInfo.avatar;
+        if (otherInfo.device) otherUser.device = otherInfo.device;
+        otherUser.online = otherInfo.online;
+        otherUser.lastSeen = otherInfo.lastSeen || Date.now();
+        AppStorage.saveUser(otherUser.id, otherUser);
+        this.notifyListeners('user_status', {
+          userId: otherUserId,
+          status: otherInfo.online ? 'online' : 'offline',
+          sessionId: data.sessionId
+        });
+        this.notifyListeners('session_updated', this.activeSession);
+      }
+    }
+
+    this.notifyListeners('presence', data);
+  }
+
+  handleSessionMeta(data) {
+    if (data.sessionId !== this.activeSession?.id || !data.meta) return;
+
+    const meta = data.meta;
+    if (meta.createdBy && meta.createdBy !== this.currentUser?.id) {
+      const otherUser = this.getOtherUser(this.activeSession);
+      if (otherUser && meta.createdByName) {
+        otherUser.name = meta.createdByName;
+        AppStorage.saveUser(otherUser.id, otherUser);
+        this.notifyListeners('session_updated', this.activeSession);
+      }
+    }
   }
 
   addListener(event, fn) {
@@ -57,6 +105,7 @@ class ChatEngine {
   }
 
   getOtherUser(session) {
+    if (!session || !this.currentUser) return null;
     const otherId = session.participants.find(id => id !== this.currentUser?.id);
     return otherId ? AppStorage.getUser(otherId) : null;
   }
@@ -92,13 +141,26 @@ class ChatEngine {
     this.messages = AppStorage.getMessages(session.id);
     session.unread = 0;
     AppStorage.saveSession(session);
+
+    this.sync.joinRoom(session.id, this.currentUser.id, {
+      name: this.currentUser.name,
+      avatar: this.currentUser.avatar,
+      device: this.currentUser.device
+    });
+
     this.notifyListeners('session_opened', session);
-    this.broadcast.postMessage({
+    this.sync.send({
       type: 'user_online',
       userId: this.currentUser.id,
       sessionId: session.id
     });
     return this.messages;
+  }
+
+  closeSession() {
+    this.sync.leaveRoom();
+    this.activeSession = null;
+    AppStorage.setActiveSession(null);
   }
 
   sendMessage(text) {
@@ -119,7 +181,7 @@ class ChatEngine {
     this.updateSessionLastMsg(msg.text);
     this.replyTo = null;
 
-    this.broadcast.postMessage({
+    this.sync.send({
       type: 'new_message',
       sessionId: this.activeSession.id,
       userId: this.currentUser.id,
@@ -174,7 +236,7 @@ class ChatEngine {
     msg.edited = true;
     AppStorage.updateMessage(this.activeSession.id, msgId, { text: newText, edited: true });
 
-    this.broadcast.postMessage({
+    this.sync.send({
       type: 'message_updated',
       sessionId: this.activeSession.id,
       messageId: msgId,
@@ -191,7 +253,7 @@ class ChatEngine {
     this.messages = this.messages.filter(m => m.id !== msgId);
     this.selectedMessages.delete(msgId);
 
-    this.broadcast.postMessage({
+    this.sync.send({
       type: 'message_deleted',
       sessionId: this.activeSession.id,
       messageId: msgId
@@ -227,7 +289,7 @@ class ChatEngine {
     };
 
     AppStorage.addMessage(targetSessionId, forwardMsg);
-    this.broadcast.postMessage({
+    this.sync.send({
       type: 'new_message',
       sessionId: targetSessionId,
       userId: this.currentUser.id,
@@ -279,6 +341,58 @@ class ChatEngine {
     });
   }
 
+  getShareableLink(sessionId) {
+    if (!sessionId) sessionId = this.activeSession?.id;
+    if (!sessionId) return '';
+
+    if (this.sync.firebaseReady) {
+      this.sync.db.ref(`rooms/${sessionId}/meta`).update({
+        createdBy: this.currentUser.id,
+        createdByName: this.currentUser.name,
+        createdByAvatar: this.currentUser.avatar,
+        createdAt: Date.now()
+      });
+    }
+
+    const base = window.location.href.split('#')[0].split('?')[0];
+    return base + '?join=' + encodeURIComponent(sessionId);
+  }
+
+  joinSessionByLink(linkOrId) {
+    const sessionId = linkOrId.replace(/.*[?&]join=/, '');
+    if (!sessionId) return null;
+
+    const existing = AppStorage.getSession(sessionId);
+    if (existing) {
+      this.openSession(existing);
+      return existing;
+    }
+
+    const otherUserId = 'remote_' + sessionId.slice(-8);
+    const otherUser = {
+      id: otherUserId,
+      name: 'Connected User',
+      avatar: Math.floor(Math.random() * 6),
+      device: this.currentUser?.device === 'mobile' ? 'desktop' : 'mobile',
+      createdAt: Date.now(),
+      lastSeen: Date.now()
+    };
+    AppStorage.saveUser(otherUserId, otherUser);
+
+    const session = {
+      id: sessionId,
+      participants: [this.currentUser.id, otherUserId],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      lastMessage: '',
+      archived: false,
+      unread: 0
+    };
+    AppStorage.saveSession(session);
+    this.openSession(session);
+    return session;
+  }
+
   exportChat(sessionId) {
     const msgs = AppStorage.getMessages(sessionId);
     const session = AppStorage.getSession(sessionId);
@@ -307,7 +421,7 @@ class ChatEngine {
 
   sendTypingIndicator() {
     if (!this.activeSession) return;
-    this.broadcast.postMessage({
+    this.sync.send({
       type: 'typing',
       userId: this.currentUser.id,
       sessionId: this.activeSession.id
