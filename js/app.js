@@ -3,7 +3,6 @@
 
   if (window.__chatInitialized) return;
   window.__chatInitialized = true;
-  window.__chatInitialized = true;
 
   const chat = new ChatEngine();
   const ui = new UIManager(chat);
@@ -70,4 +69,4 @@
   }
 
   console.log('PremiumChat v3.0.0 — Firebase Realtime Sync');
-}
+})();

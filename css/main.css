@@ -135,7 +135,9 @@ html, body {
   font-weight: 800;
   background: var(--accent-gradient);
   -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
+  color: transparent;
   opacity: 0;
   transform: translateY(20px);
   animation: splashFadeUp 0.8s 0.3s forwards;
@@ -623,7 +625,9 @@ html, body {
   margin-bottom: 8px;
   background: var(--accent-gradient);
   -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
+  color: transparent;
 }
 
 .no-chat-content p {
@@ -717,6 +721,7 @@ html, body {
   align-items: center;
   gap: 4px;
 }
+.cu-status.offline { color: var(--text-muted); }
 
 .status-dot {
   width: 6px;

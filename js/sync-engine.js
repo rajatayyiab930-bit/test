@@ -43,10 +43,12 @@ class SyncEngine {
   _initFirebase() {
     if (typeof firebase === 'undefined' || !firebase.initializeApp) {
       console.warn('[Sync] Firebase compat SDK not loaded — cross-device sync disabled');
+      this._pending = null;
       return;
     }
     if (!FIREBASE_CONFIG || !FIREBASE_CONFIG.apiKey) {
       console.warn('[Sync] No Firebase config — cross-device sync disabled');
+      this._pending = null;
       return;
     }
     try {
@@ -62,6 +64,7 @@ class SyncEngine {
       q.forEach(([type, data]) => this._write(type, data));
     } catch (e) {
       console.error('[Sync] Firebase init error:', e);
+      this._pending = null;
     }
   }
 

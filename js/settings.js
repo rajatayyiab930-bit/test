@@ -320,17 +320,10 @@ class SettingsManager {
 
       if (e.key === 'Backspace' && e.ctrlKey && document.activeElement !== this.els['message-input']) {
         if (this.chat.activeSession && confirm('Delete current chat?')) {
-          this.els['chat-menu-dropdown'].querySelector('[data-action="delete-chat"]')?.click();
+          this.els['chat-menu-dropdown']?.querySelector('[data-action="delete-chat"]')?.click();
         }
       }
     });
-
-    let lastTouch = 0;
-    document.addEventListener('touchstart', (e) => {
-      const now = Date.now();
-      if (now - lastTouch <= 300) e.preventDefault();
-      lastTouch = now;
-    }, { passive: false });
 
     window.addEventListener('resize', () => {
       if (window.innerWidth >= 768) {

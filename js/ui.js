@@ -37,7 +37,7 @@ class UIManager {
     this.chat.on('session_opened', (s) => this.updateChatHeader(s));
     this.chat.on('session_updated', () => this.renderChatList());
     this.chat.on('user_status', (d) => this.updateUserStatus(d));
-    this.chat.on('typing', () => this.showTyping());
+    this.chat.on('typing', (d) => this.showTyping(d));
     this.chat.on('connection', (connected) => {
       const el = this.els['cu-status'];
       if (el && this.chat.activeSession) {
@@ -451,12 +451,30 @@ class UIManager {
     });
   }
 
-  showTyping() {}
+  showTyping(data) {
+    if (!this.chat.activeSession || data?.sessionId !== this.chat.activeSession.id) return;
+    const el = this.els['cu-status'];
+    if (el) {
+      const other = this.chat.getOtherUser(this.chat.activeSession);
+      el.innerHTML = `<span class="status-dot online"></span> typing...`;
+      el.classList.add('offline');
+    }
+    if (this._typingTimer) clearTimeout(this._typingTimer);
+    this._typingTimer = setTimeout(() => {
+      if (this.chat.activeSession && this.chat.activeSession.id === data?.sessionId) {
+        this.updateUserStatus({ sessionId: data.sessionId, status: 'online' });
+      }
+    }, 2500);
+  }
 
   updateUserStatus(data) {
     if (data.sessionId === this.chat.activeSession?.id) {
       const statusText = data.status === 'online' ? 'Online' : 'Offline';
-      this.els['cu-status'].innerHTML = `<span class="status-dot ${data.status}"></span> ${statusText}`;
+      const el = this.els['cu-status'];
+      if (el) {
+        el.innerHTML = `<span class="status-dot ${data.status}"></span> ${statusText}`;
+        el.classList.toggle('offline', data.status !== 'online');
+      }
     }
   }
 }

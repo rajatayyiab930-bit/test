@@ -17,7 +17,12 @@ class AppStorage {
 
   static set(key, val) {
     try { localStorage.setItem(key, JSON.stringify(val)); return true; }
-    catch { return false; }
+    catch (e) {
+      if (e.name === 'QuotaExceededError' || e.code === 22) {
+        console.warn('[Storage] localStorage quota exceeded — data may not persist');
+      }
+      return false;
+    }
   }
 
   static remove(key) {
@@ -53,7 +58,7 @@ class AppStorage {
   static saveMessages(sessionId, msgs) { return this.set(this.KEYS.MESSAGES + sessionId, msgs); }
   static addMessage(sessionId, msg) {
     const msgs = this.getMessages(sessionId);
-    msg.id = msg.id || 'msg_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5);
+    msg.id = msg.id || 'msg_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
     msg.timestamp = msg.timestamp || Date.now();
     msgs.push(msg);
     this.saveMessages(sessionId, msgs);
@@ -80,7 +85,7 @@ class AppStorage {
   static getActiveSession() { return this.get(this.KEYS.ACTIVE_SESSION); }
   static setActiveSession(id) { return this.set(this.KEYS.ACTIVE_SESSION, id); }
 
-  static generateId() { return 'id_' + Date.now() + '_' + Math.random().toString(36).substr(2, 8); }
+  static generateId() { return 'id_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10); }
 
   static exportAll() {
     const keys = Object.keys(localStorage).filter(k => k.startsWith('pc_'));

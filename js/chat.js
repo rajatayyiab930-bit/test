@@ -189,7 +189,7 @@ class ChatEngine {
     if (!this.activeSession || !text.trim()) return null;
 
     const msg = {
-      id: 'msg_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+      id: 'msg_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
       sessionId: this.activeSession.id,
       senderId: this.currentUser.id,
       text: text.trim(),
@@ -200,24 +200,26 @@ class ChatEngine {
       forwarded: false
     };
 
-    AppStorage.addMessage(this.activeSession.id, msg);
+    const sessionId = this.activeSession.id;
+    AppStorage.addMessage(sessionId, msg);
     this.messages.push(msg);
     this._updateSessionLastMsg(msg.text);
     this.replyTo = null;
 
     this.sync.sendMessage(msg);
 
-    // Simulate delivery status locally
-    setTimeout(() => this._setStatus(msg.id, 'sent'), 300);
-    setTimeout(() => this._setStatus(msg.id, 'delivered'), 800);
-    setTimeout(() => this._setStatus(msg.id, 'read'), 2000);
+    // Simulate delivery status locally (capture sessionId to avoid stale closures)
+    const sid = sessionId;
+    setTimeout(() => this._setStatus(msg.id, 'sent', sid), 300);
+    setTimeout(() => this._setStatus(msg.id, 'delivered', sid), 800);
+    setTimeout(() => this._setStatus(msg.id, 'read', sid), 2000);
 
     this._emit('new_message', msg);
     return msg;
   }
 
-  _setStatus(msgId, status) {
-    if (!this.activeSession) return;
+  _setStatus(msgId, status, sessionId) {
+    if (!this.activeSession || this.activeSession.id !== sessionId) return;
     const msg = this.messages.find(m => m.id === msgId);
     if (!msg) return;
     msg.status = status;
@@ -235,6 +237,7 @@ class ChatEngine {
     msg.text = newText;
     msg.edited = true;
     AppStorage.updateMessage(this.activeSession.id, msgId, { text: newText, edited: true });
+    this._updateSessionLastMsg(newText);
 
     this.sync.sendEdit(this.activeSession.id, msgId, newText);
     this._emit('message_updated', msg);
@@ -267,7 +270,7 @@ class ChatEngine {
     if (!msg) return null;
 
     const fwd = {
-      id: 'msg_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+      id: 'msg_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
       sessionId: targetSessionId,
       senderId: this.currentUser.id,
       text: msg.text,
